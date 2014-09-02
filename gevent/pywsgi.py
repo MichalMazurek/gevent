@@ -5,6 +5,7 @@ import errno
 import sys
 import time
 import traceback
+import types
 from datetime import datetime
 try:
     from urllib import unquote
@@ -16,6 +17,14 @@ import gevent
 from gevent.server import StreamServer
 from gevent.hub import GreenletExit, PY3, reraise
 
+def bytestring(data):
+    if PY3:
+        if isinstance(data, str):
+            return data.encode("utf-8")
+        else:
+            return data
+    else:
+        return data
 
 __all__ = ['WSGIHandler', 'WSGIServer']
 
@@ -189,7 +198,11 @@ except ImportError:
         def typeheader(self):
             return self.get('content-type')
 
-    def headers_factory(fp, *args):
+    def headers_factory(obj, fp, *args):
+        """
+        First argument is an object WSGIHandler, because it is run as:
+        self.MessageClass
+        """
         try:
             ret = client.parse_headers(fp, _class=OldMessage)
         except client.LineTooLong:
@@ -222,6 +235,9 @@ class WSGIHandler(object):
                 if result is True:
                     continue
                 self.status, response_body = result
+                if PY3:
+                    # for Python3 we need to send bytes instead of string
+                    response_body = bytes(response_body, "utf-8")
                 self.socket.sendall(response_body)
                 if self.time_finish == 0:
                     self.time_finish = time.time()
@@ -232,9 +248,15 @@ class WSGIHandler(object):
                 try:
                     # read out request data to prevent error: [Errno 104] Connection reset by peer
                     try:
-                        self.socket._sock.recv(16384)
+                        if PY3:
+                            self.socket.recv(16384)
+                        else:
+                            self.socket._sock.recv(16384)
                     finally:
-                        self.socket._sock.close()  # do not rely on garbage collection
+                        try:
+                            self.socket._sock.close()  # do not rely on garbage collection
+                        except AttributeError:
+                            pass
                         self.socket.close()
                 except socket.error:
                     pass
@@ -252,6 +274,10 @@ class WSGIHandler(object):
 
     def read_request(self, raw_requestline):
         self.requestline = raw_requestline.rstrip()
+
+        if PY3:
+            self.requestline = self.requestline.decode("utf-8")
+
         words = self.requestline.split()
         if len(words) == 3:
             self.command, self.path, self.request_version = words
@@ -268,8 +294,8 @@ class WSGIHandler(object):
         else:
             self.log_error('Invalid HTTP method: %r', raw_requestline)
             return
-
         self.headers = self.MessageClass(self.rfile, 0)
+
         if self.headers.status:
             self.log_error('Invalid headers status: %r', self.headers.status)
             return
@@ -418,17 +444,17 @@ class WSGIHandler(object):
         self.headers_sent = True
         self.finalize_headers()
 
-        towrite.extend('HTTP/1.1 %s\r\n' % self.status)
+        towrite.extend(bytestring('HTTP/1.1 %s\r\n' % self.status))
         for header in self.response_headers:
-            towrite.extend('%s: %s\r\n' % header)
+            towrite.extend(bytestring('%s: %s\r\n' % header))
 
-        towrite.extend('\r\n')
+        towrite.extend(bytestring('\r\n'))
         if data:
             if self.response_use_chunked:
                 ## Write the chunked encoding
-                towrite.extend("%x\r\n%s\r\n" % (len(data), data))
+                towrite.extend(bytestring("%x\r\n%s\r\n" % (len(data), data)))
             else:
-                towrite.extend(data)
+                towrite.extend(bytestring(data))
         self._sendall(towrite)
 
     def start_response(self, status, headers, exc_info=None):

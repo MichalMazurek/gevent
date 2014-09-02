@@ -5,6 +5,7 @@ import time
 from gevent import _socketcommon
 import _socket
 from io import BlockingIOError
+from sys import platform as _platform
 
 for key in _socketcommon.__dict__:
     if key.startswith('__'):
@@ -46,7 +47,10 @@ class socket(_socket.socket):
 
     @property
     def type(self):
-        return _socket.socket.type.__get__(self) & ~_socket.SOCK_NONBLOCK
+        if _platform == "linux" or _platform == "linux2":
+            return _socket.socket.type.__get__(self) & ~_socket.SOCK_NONBLOCK
+        else:
+            return _socket.socket.type.__get__(self)
 
     def __enter__(self):
         return self
